@@ -8,7 +8,7 @@ Windows Terminal, though there is likely no difference in functionality with bas
 *the scripts should be in theory mostly compatible with Linux systems that have Powershell 7 installed, but no testing has been done with any Linux distro plus Powershell 7 at this time. Plus, Linux platform would likely benefit more from a well built shell batch script instead.*  
 
 Prerequisites:   
-JPEG-XL handling and JXL focused scripts: [Binaries of libjxl](https://github.com/libjxl/libjxl), preferably in directory that's in the %PATH%.  
+JPEG-XL handling and JXL focused scripts: [Binaries of libjxl](https://github.com/libjxl/libjxl).  
 JPEGLI related handling and scripts: [jpegli tools](https://github.com/google/jpegli). Google does not provide builds, so you have to bring your own msys/visual studio install and let them rip.   
 WebP handling: [libwebp/webp codec binaries](https://github.com/webmproject/libwebp). Google does not have prebuilt releases so you have to fire up visual studio and build it yourself.   
 Avif handling: [Avif encoder and decoder binaries](https://github.com/AOMediaCodec/libavif). Luckily, builds are provided in releases of this project.   
