@@ -14,7 +14,7 @@ WebP handling: [libwebp/webp codec binaries](https://github.com/webmproject/libw
 Avif handling: [Avif encoder and decoder binaries](https://github.com/AOMediaCodec/libavif). Luckily, builds are provided in releases of this project.   
 Additionally; For animated webp and animalted avif scripts, [FFMPEG](https://github.com/FFmpeg/FFmpeg) binaries are required.     
 
-*Under the legal ambiguity, I do not provide builds. The tools and their requisite libraries should be in a directory exposed to %PATH%.*      
+*Under the legal ambiguity, I do not provide builds. The tools and their requisite libraries should be in a directory exposed to %PATH%. Usage of these scripts is also made easier by placing them in a directory exposed to %PATH%. I personally have a C:\bin\ directory for this purpose.*      
 
 
 #### General usage:   
