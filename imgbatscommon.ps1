@@ -89,12 +89,9 @@ function Img-TruncatePath {
 # =====================================================================
 # Public: spinner — start / stop
 #
-# Runs in a background job so the main thread stays free to call the
-# encoder synchronously. The job only writes to the console via the
-# RunspacePool trick: instead of a proper job (which can't write to
-# the parent's console handle directly), we use a .NET thread with
-# $Host.UI shared via a closure — the cleanest pattern for in-process
-# spinner animation in PowerShell 5.1 and 7.
+# Runs in a background thread (not a PowerShell job) to animate progress
+# while the main thread handles encoding. Uses pure .NET calls to write
+# to console via $Host.UI to avoid runspace issues.
 # =====================================================================
 
 function Img-StartSpinner {
@@ -108,7 +105,6 @@ function Img-StartSpinner {
     Img-StopSpinner
 
     $frames    = $script:NF.Spinner
-    $counter   = [System.Text.StringBuilder]::new()
     $startTime = [DateTime]::Now
 
     $prefix =
@@ -127,6 +123,9 @@ function Img-StartSpinner {
     $labelTrunc = Img-TruncatePath -Path $Label -MaxChars 40
     $ui = $Host.UI
 
+    # Capture frame count for use in thread
+    $frameCount = $frames.Count
+
     $script:SpinnerJob = [System.Threading.Thread]::new([System.Threading.ThreadStart] {
         $i = 0
         while (-not $stopRef[0]) {
@@ -139,7 +138,7 @@ function Img-StartSpinner {
                     "$([int]$elapsed.TotalMinutes)m $($elapsed.Seconds)s"
                 }
 
-            $frame = $frames[$i % $frames.Count]
+            $frame = $frames[$i % $frameCount]
             $line  = "  $prefix $labelTrunc  $frame  $ts   "
 
             $ui.Write("`r$line")
@@ -148,7 +147,7 @@ function Img-StartSpinner {
         }
         # Clear the spinner line
         $ui.Write("`r" + (' ' * 72) + "`r")
-    })
+    }.GetNewClosure())
 
     $script:SpinnerJob.IsBackground = $true
     $script:SpinnerJob.Start()
