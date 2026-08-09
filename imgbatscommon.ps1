@@ -99,21 +99,21 @@ public class SpinnerWorker {
     private string labelTrunc;
     private dynamic ui;
     private int frameCount;
-    private bool[] stopRef;
+    private System.Threading.ManualResetEvent stopEvent;
 
-    public SpinnerWorker(string[] frames, System.DateTime startTime, string prefix, string labelTrunc, dynamic ui, int frameCount, bool[] stopRef) {
+    public SpinnerWorker(string[] frames, System.DateTime startTime, string prefix, string labelTrunc, dynamic ui, int frameCount, System.Threading.ManualResetEvent stopEvent) {
         this.frames = frames;
         this.startTime = startTime;
         this.prefix = prefix;
         this.labelTrunc = labelTrunc;
         this.ui = ui;
         this.frameCount = frameCount;
-        this.stopRef = stopRef;
+        this.stopEvent = stopEvent;
     }
 
     public void Run() {
         int i = 0;
-        while (!stopRef[0]) {
+        while (!stopEvent.WaitOne(100)) {
             System.TimeSpan elapsed = System.DateTime.Now - startTime;
             int totalSecs = (int)elapsed.TotalSeconds;
             int totalMins = (int)elapsed.TotalMinutes;
@@ -130,7 +130,6 @@ public class SpinnerWorker {
             string line = "  " + prefix + " " + labelTrunc + "  " + frame + "  " + ts + "   ";
 
             ui.Write("\r" + line);
-            System.Threading.Thread.Sleep(100);
             i++;
         }
         // Clear the spinner line
@@ -143,7 +142,8 @@ public class SpinnerWorker {
 # =====================================================================
 # Public: spinner — start / stop
 #
-# Runs in a background thread using compiled C# to avoid runspace issues.
+# Runs in a background thread using compiled C# with proper synchronization.
+# Uses ManualResetEvent for reliable thread shutdown.
 # =====================================================================
 
 function Img-StartSpinner {
@@ -167,9 +167,9 @@ function Img-StartSpinner {
             ''
         }
 
-    # Shared stop-signal
-    $script:SpinnerStop = @($false)
-    $stopRef = $script:SpinnerStop
+    # Shared stop-signal using .NET synchronization primitive
+    $script:SpinnerStop = [System.Threading.ManualResetEvent]::new($false)
+    $stopEvent = $script:SpinnerStop
 
     $labelTrunc = Img-TruncatePath -Path $Label -MaxChars 40
     $ui = $Host.UI
@@ -179,7 +179,7 @@ function Img-StartSpinner {
     $frameCount = $frameArray.Length
     
     try {
-        $worker = [SpinnerWorker]::new($frameArray, $startTime, $prefix, $labelTrunc, $ui, $frameCount, $stopRef)
+        $worker = [SpinnerWorker]::new($frameArray, $startTime, $prefix, $labelTrunc, $ui, $frameCount, $stopEvent)
         $script:SpinnerJob = [System.Threading.Thread]::new([System.Threading.ThreadStart]$worker.Run)
         $script:SpinnerJob.IsBackground = $true
         $script:SpinnerJob.Start()
@@ -187,24 +187,31 @@ function Img-StartSpinner {
     catch {
         Write-Verbose "Spinner failed to start: $_"
         $script:SpinnerJob = $null
+        $script:SpinnerStop?.Dispose()
+        $script:SpinnerStop = $null
     }
 }
 
 function Img-StopSpinner {
     if ($null -ne $script:SpinnerStop) {
-        $script:SpinnerStop[0] = $true
-        
-        if ($null -ne $script:SpinnerJob) {
-            try {
-                $script:SpinnerJob.Join(500)
-            }
-            catch {
-                Write-Verbose "Error stopping spinner: $_"
+        try {
+            # Signal the thread to stop
+            $script:SpinnerStop.Set() | Out-Null
+            
+            # Wait for thread to exit
+            if ($null -ne $script:SpinnerJob) {
+                $script:SpinnerJob.Join(1000)
             }
         }
-        
-        $script:SpinnerStop = $null
-        $script:SpinnerJob  = $null
+        catch {
+            Write-Verbose "Error stopping spinner: $_"
+        }
+        finally {
+            # Clean up resources
+            $script:SpinnerStop.Dispose()
+            $script:SpinnerStop = $null
+            $script:SpinnerJob  = $null
+        }
     }
 }
 
