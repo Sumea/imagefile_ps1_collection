@@ -89,10 +89,64 @@ function Img-TruncatePath {
 # =====================================================================
 # Public: spinner — start / stop
 #
-# Runs in a background thread using only .NET types to avoid runspace
-# issues. All string interpolation and PowerShell operations happen in
-# the main script before passing values to the thread.
+# Runs in a background thread. Uses a .NET object to encapsulate state
+# and avoid PowerShell script block execution in the thread.
 # =====================================================================
+
+$script:SpinnerWorkerCode = @"
+public class SpinnerWorker {
+    private string[] frames;
+    private DateTime startTime;
+    private string prefix;
+    private string labelTrunc;
+    private dynamic ui;
+    private int frameCount;
+    private bool[] stopRef;
+
+    public SpinnerWorker(string[] frames, DateTime startTime, string prefix, string labelTrunc, dynamic ui, int frameCount, bool[] stopRef) {
+        this.frames = frames;
+        this.startTime = startTime;
+        this.prefix = prefix;
+        this.labelTrunc = labelTrunc;
+        this.ui = ui;
+        this.frameCount = frameCount;
+        this.stopRef = stopRef;
+    }
+
+    public void Run() {
+        int i = 0;
+        while (!stopRef[0]) {
+            TimeSpan elapsed = DateTime.Now - startTime;
+            int totalSecs = (int)elapsed.TotalSeconds;
+            int totalMins = (int)elapsed.TotalMinutes;
+            int secs = elapsed.Seconds;
+
+            string ts;
+            if (totalSecs < 60) {
+                ts = totalSecs.ToString() + "s";
+            } else {
+                ts = totalMins.ToString() + "m " + secs.ToString() + "s";
+            }
+
+            string frame = frames[i % frameCount];
+            string line = "  " + prefix + " " + labelTrunc + "  " + frame + "  " + ts + "   ";
+
+            ui.Write("\r" + line);
+            System.Threading.Thread.Sleep(100);
+            i++;
+        }
+        // Clear the spinner line
+        ui.Write("\r" + new string(' ', 72) + "\r");
+    }
+}
+"@
+
+# Add the C# type once at script load time
+try {
+    Add-Type -TypeDefinition $script:SpinnerWorkerCode -ErrorAction Stop
+} catch {
+    # Type may already be loaded
+}
 
 function Img-StartSpinner {
     param(
@@ -115,49 +169,22 @@ function Img-StartSpinner {
             ''
         }
 
-    # Shared stop-signal: a single-element array so the thread closure
-    # can see mutations (plain booleans in closures are copied by value).
+    # Shared stop-signal
     $script:SpinnerStop = @($false)
     $stopRef = $script:SpinnerStop
 
     $labelTrunc = Img-TruncatePath -Path $Label -MaxChars 40
     $ui = $Host.UI
 
-    # Convert frames to string array (avoid accessing .Count in thread)
+    # Create the C# worker object
     $frameArray = [string[]]$frames
     $frameCount = $frameArray.Length
+    $worker = [SpinnerWorker]::new($frameArray, $startTime, $prefix, $labelTrunc, $ui, $frameCount, $stopRef)
 
-    # Thread worker method with explicit parameters
-    $threadMethod = {
-        param($frames, $startTime, $prefix, $labelTrunc, $ui, $frameCount, $stopRef)
-        
-        $i = 0
-        while (-not $stopRef[0]) {
-            $elapsed = [DateTime]::Now - $startTime
-            $totalSecs = [int]$elapsed.TotalSeconds
-            $totalMins = [int]$elapsed.TotalMinutes
-            $secs = $elapsed.Seconds
-            
-            if ($totalSecs -lt 60) {
-                $ts = $totalSecs.ToString() + "s"
-            } else {
-                $ts = $totalMins.ToString() + "m " + $secs.ToString() + "s"
-            }
-
-            $frame = $frames[$i % $frameCount]
-            $line  = "  " + $prefix + " " + $labelTrunc + "  " + $frame + "  " + $ts + "   "
-
-            $ui.Write("`r$line")
-            [System.Threading.Thread]::Sleep(100)
-            $i++
-        }
-        # Clear the spinner line
-        $ui.Write("`r" + (' ' * 72) + "`r")
-    }
-
-    $script:SpinnerJob = [System.Threading.Thread]::new([System.Threading.ParameterizedThreadStart]$threadMethod)
+    # Create thread with the worker's Run method
+    $script:SpinnerJob = [System.Threading.Thread]::new([System.Threading.ThreadStart]$worker.Run)
     $script:SpinnerJob.IsBackground = $true
-    $script:SpinnerJob.Start(@($frameArray, $startTime, $prefix, $labelTrunc, $ui, $frameCount, $stopRef))
+    $script:SpinnerJob.Start()
 }
 
 function Img-StopSpinner {
