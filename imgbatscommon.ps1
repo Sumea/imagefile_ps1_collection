@@ -89,9 +89,9 @@ function Img-TruncatePath {
 # =====================================================================
 # Public: spinner — start / stop
 #
-# Runs in a background thread (not a PowerShell job) to animate progress
-# while the main thread handles encoding. Uses pure .NET calls to write
-# to console via $Host.UI to avoid runspace issues.
+# Runs in a background thread using only .NET types to avoid runspace
+# issues. All string interpolation and PowerShell operations happen in
+# the main script before passing values to the thread.
 # =====================================================================
 
 function Img-StartSpinner {
@@ -123,23 +123,28 @@ function Img-StartSpinner {
     $labelTrunc = Img-TruncatePath -Path $Label -MaxChars 40
     $ui = $Host.UI
 
-    # Capture frame count for use in thread
-    $frameCount = $frames.Count
+    # Convert frames to string array (avoid accessing .Count in thread)
+    $frameArray = [string[]]$frames
+    $frameCount = $frameArray.Length
 
-    $script:SpinnerJob = [System.Threading.Thread]::new([System.Threading.ThreadStart] {
+    $script:SpinnerJob = [System.Threading.Thread]::new({
+        param($frames, $startTime, $prefix, $labelTrunc, $ui, $frameCount, $stopRef)
+        
         $i = 0
         while (-not $stopRef[0]) {
             $elapsed = [DateTime]::Now - $startTime
-            $ts =
-                if ($elapsed.TotalSeconds -lt 60) {
-                    "$([int]$elapsed.TotalSeconds)s"
-                }
-                else {
-                    "$([int]$elapsed.TotalMinutes)m $($elapsed.Seconds)s"
-                }
+            $totalSecs = [int]$elapsed.TotalSeconds
+            $totalMins = [int]$elapsed.TotalMinutes
+            $secs = $elapsed.Seconds
+            
+            if ($totalSecs -lt 60) {
+                $ts = $totalSecs.ToString() + "s"
+            } else {
+                $ts = $totalMins.ToString() + "m " + $secs.ToString() + "s"
+            }
 
-            $frame = $frames[$i % $frameCount]
-            $line  = "  $prefix $labelTrunc  $frame  $ts   "
+            $frame = $frameArray[$i % $frameCount]
+            $line  = "  " + $prefix + " " + $labelTrunc + "  " + $frame + "  " + $ts + "   "
 
             $ui.Write("`r$line")
             [System.Threading.Thread]::Sleep(100)
@@ -147,7 +152,7 @@ function Img-StartSpinner {
         }
         # Clear the spinner line
         $ui.Write("`r" + (' ' * 72) + "`r")
-    }.GetNewClosure())
+    }, $frameArray, $startTime, $prefix, $labelTrunc, $ui, $frameCount, $stopRef)
 
     $script:SpinnerJob.IsBackground = $true
     $script:SpinnerJob.Start()
