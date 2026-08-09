@@ -87,23 +87,21 @@ function Img-TruncatePath {
 }
 
 # =====================================================================
-# Public: spinner — start / stop
-#
-# Runs in a background thread. Uses a .NET object to encapsulate state
-# and avoid PowerShell script block execution in the thread.
+# Spinner worker C# class - compiled once at module load
 # =====================================================================
 
-$script:SpinnerWorkerCode = @"
+if (-not ("SpinnerWorker" -as [type])) {
+    Add-Type -TypeDefinition @"
 public class SpinnerWorker {
     private string[] frames;
-    private DateTime startTime;
+    private System.DateTime startTime;
     private string prefix;
     private string labelTrunc;
     private dynamic ui;
     private int frameCount;
     private bool[] stopRef;
 
-    public SpinnerWorker(string[] frames, DateTime startTime, string prefix, string labelTrunc, dynamic ui, int frameCount, bool[] stopRef) {
+    public SpinnerWorker(string[] frames, System.DateTime startTime, string prefix, string labelTrunc, dynamic ui, int frameCount, bool[] stopRef) {
         this.frames = frames;
         this.startTime = startTime;
         this.prefix = prefix;
@@ -116,7 +114,7 @@ public class SpinnerWorker {
     public void Run() {
         int i = 0;
         while (!stopRef[0]) {
-            TimeSpan elapsed = DateTime.Now - startTime;
+            System.TimeSpan elapsed = System.DateTime.Now - startTime;
             int totalSecs = (int)elapsed.TotalSeconds;
             int totalMins = (int)elapsed.TotalMinutes;
             int secs = elapsed.Seconds;
@@ -140,13 +138,13 @@ public class SpinnerWorker {
     }
 }
 "@
-
-# Add the C# type once at script load time
-try {
-    Add-Type -TypeDefinition $script:SpinnerWorkerCode -ErrorAction Stop
-} catch {
-    # Type may already be loaded
 }
+
+# =====================================================================
+# Public: spinner — start / stop
+#
+# Runs in a background thread using compiled C# to avoid runspace issues.
+# =====================================================================
 
 function Img-StartSpinner {
     param(
