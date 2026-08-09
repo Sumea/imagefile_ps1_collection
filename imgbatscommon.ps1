@@ -177,18 +177,32 @@ function Img-StartSpinner {
     # Create the C# worker object
     $frameArray = [string[]]$frames
     $frameCount = $frameArray.Length
-    $worker = [SpinnerWorker]::new($frameArray, $startTime, $prefix, $labelTrunc, $ui, $frameCount, $stopRef)
-
-    # Create thread with the worker's Run method
-    $script:SpinnerJob = [System.Threading.Thread]::new([System.Threading.ThreadStart]$worker.Run)
-    $script:SpinnerJob.IsBackground = $true
-    $script:SpinnerJob.Start()
+    
+    try {
+        $worker = [SpinnerWorker]::new($frameArray, $startTime, $prefix, $labelTrunc, $ui, $frameCount, $stopRef)
+        $script:SpinnerJob = [System.Threading.Thread]::new([System.Threading.ThreadStart]$worker.Run)
+        $script:SpinnerJob.IsBackground = $true
+        $script:SpinnerJob.Start()
+    }
+    catch {
+        Write-Verbose "Spinner failed to start: $_"
+        $script:SpinnerJob = $null
+    }
 }
 
 function Img-StopSpinner {
     if ($null -ne $script:SpinnerStop) {
         $script:SpinnerStop[0] = $true
-        $script:SpinnerJob?.Join(500)
+        
+        if ($null -ne $script:SpinnerJob) {
+            try {
+                $script:SpinnerJob.Join(500)
+            }
+            catch {
+                Write-Verbose "Error stopping spinner: $_"
+            }
+        }
+        
         $script:SpinnerStop = $null
         $script:SpinnerJob  = $null
     }
