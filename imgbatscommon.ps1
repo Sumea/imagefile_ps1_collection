@@ -127,7 +127,8 @@ function Img-StartSpinner {
     $frameArray = [string[]]$frames
     $frameCount = $frameArray.Length
 
-    $script:SpinnerJob = [System.Threading.Thread]::new({
+    # Thread worker method with explicit parameters
+    $threadMethod = {
         param($frames, $startTime, $prefix, $labelTrunc, $ui, $frameCount, $stopRef)
         
         $i = 0
@@ -143,7 +144,7 @@ function Img-StartSpinner {
                 $ts = $totalMins.ToString() + "m " + $secs.ToString() + "s"
             }
 
-            $frame = $frameArray[$i % $frameCount]
+            $frame = $frames[$i % $frameCount]
             $line  = "  " + $prefix + " " + $labelTrunc + "  " + $frame + "  " + $ts + "   "
 
             $ui.Write("`r$line")
@@ -152,10 +153,11 @@ function Img-StartSpinner {
         }
         # Clear the spinner line
         $ui.Write("`r" + (' ' * 72) + "`r")
-    }, $frameArray, $startTime, $prefix, $labelTrunc, $ui, $frameCount, $stopRef)
+    }
 
+    $script:SpinnerJob = [System.Threading.Thread]::new([System.Threading.ParameterizedThreadStart]$threadMethod)
     $script:SpinnerJob.IsBackground = $true
-    $script:SpinnerJob.Start()
+    $script:SpinnerJob.Start(@($frameArray, $startTime, $prefix, $labelTrunc, $ui, $frameCount, $stopRef))
 }
 
 function Img-StopSpinner {
