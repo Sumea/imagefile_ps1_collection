@@ -24,6 +24,12 @@ $script:NF = @{
     Bridge     = ''      # bridge/decode step (nf-md-transit_connection)
     Encode     = ''      # encoding step      (nf-md-image_edit)
     Log        = ''      # log file           (nf-md-file_document)
+    Clock      = [char]0xF017   # fa-clock-o - Font Awesome codepoint, within
+                                  # the Basic Multilingual Plane so a plain
+                                  # [char] cast is safe (nerd-md icons above
+                                  # U+FFFF need [char]::ConvertFromUtf32
+                                  # instead, since [char] only holds one
+                                  # UTF-16 code unit)
     Spinner    = @('⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏')
 }
 
@@ -35,6 +41,72 @@ $script:LogPath      = $null
 $script:LogMarkdown  = $false
 $script:SpinnerJob   = $null
 $script:SpinnerStop  = $null
+
+# Reset the C# quit flag if the type is already compiled from a
+# previous run in this session - otherwise re-running after a Shift+Q
+# quit causes the script to quit immediately on the next run.
+if ('SpinnerWorker' -as [type]) {
+    [SpinnerWorker]::QuitRequested = $false
+}
+
+# =====================================================================
+# Public: graceful quit via Shift+Q.
+#
+# Ctrl+C on a signal thread with no PS runspace crashes the process
+# (a known PowerShell limitation that can't be worked around cleanly
+# without moving the handler entirely into C#). Instead, call
+# Img-PollQuit at the start of each file's processing block. If the
+# user pressed Shift+Q since the last check, it returns $true and the
+# caller should break its loop cleanly.
+# =====================================================================
+
+function Img-ResetQuitState {
+    <#
+        Call once at the start of each script run. The SpinnerWorker C#
+        class is compiled once per PS session and its static fields persist
+        between runs, so without this a Shift+Q from a previous run would
+        immediately re-trigger the next one.
+    #>
+    if ('SpinnerWorker' -as [type]) {
+        [SpinnerWorker]::ResetQuitState()
+    }
+}
+
+function Img-PollQuit {
+    <#
+        Returns $true if Shift+Q or Shift+Escape has been pressed.
+        Key detection runs in the C# spinner thread via Console.KeyAvailable,
+        no PS runspace involved.
+    #>
+    if ('SpinnerWorker' -as [type]) {
+        return [SpinnerWorker]::QuitRequested
+    }
+    return $false
+}
+
+function Img-IsForceQuit {
+    <#
+        Returns $true specifically if Shift+Escape was pressed (force quit).
+        Used by the caller to decide whether to clean up bridge temp files
+        and skip the summary, versus just stopping the loop cleanly.
+    #>
+    if ('SpinnerWorker' -as [type]) {
+        return [SpinnerWorker]::ForceQuitRequested
+    }
+    return $false
+}
+
+function Img-SetActiveProcess {
+    <#
+        Register the currently-running encoder process so Shift+Escape can
+        kill it immediately. Call before each encoder invocation, clear
+        after with Img-SetActiveProcess $null.
+    #>
+    param([System.Diagnostics.Process]$Process)
+    if ('SpinnerWorker' -as [type]) {
+        [SpinnerWorker]::ActiveProcess = $Process
+    }
+}
 
 # =====================================================================
 # Public: initialise logging for a run
@@ -92,48 +164,94 @@ function Img-TruncatePath {
 
 if (-not ("SpinnerWorker" -as [type])) {
     Add-Type -TypeDefinition @"
+using System;
+using System.Diagnostics;
+using System.Threading;
+
 public class SpinnerWorker {
+    // Shift+Q: finish current file then stop.
+    public static volatile bool QuitRequested = false;
+    // Shift+Escape: kill the current encoder process and stop immediately.
+    public static volatile bool ForceQuitRequested = false;
+    // Set to the active encoder process so forced quit can kill it.
+    public static volatile Process ActiveProcess = null;
+
+    // Call this at the start of each script run to clear state from any
+    // previous run in the same PS session.
+    public static void ResetQuitState() {
+        QuitRequested      = false;
+        ForceQuitRequested = false;
+        ActiveProcess      = null;
+    }
+
     private string[] frames;
-    private System.DateTime startTime;
+    private DateTime startTime;
     private string prefix;
     private string labelTrunc;
     private dynamic ui;
     private int frameCount;
-    private System.Threading.ManualResetEvent stopEvent;
+    private ManualResetEvent stopEvent;
 
-    public SpinnerWorker(string[] frames, System.DateTime startTime, string prefix, string labelTrunc, dynamic ui, int frameCount, System.Threading.ManualResetEvent stopEvent) {
-        this.frames = frames;
-        this.startTime = startTime;
-        this.prefix = prefix;
+    public SpinnerWorker(string[] frames, DateTime startTime, string prefix,
+                         string labelTrunc, dynamic ui, int frameCount,
+                         ManualResetEvent stopEvent) {
+        this.frames     = frames;
+        this.startTime  = startTime;
+        this.prefix     = prefix;
         this.labelTrunc = labelTrunc;
-        this.ui = ui;
+        this.ui         = ui;
         this.frameCount = frameCount;
-        this.stopEvent = stopEvent;
+        this.stopEvent  = stopEvent;
     }
 
     public void Run() {
         int i = 0;
         while (!stopEvent.WaitOne(100)) {
-            System.TimeSpan elapsed = System.DateTime.Now - startTime;
-            int totalSecs = (int)elapsed.TotalSeconds;
-            int totalMins = (int)elapsed.TotalMinutes;
-            int secs = elapsed.Seconds;
 
-            string ts;
-            if (totalSecs < 60) {
-                ts = totalSecs.ToString() + "s";
-            } else {
-                ts = totalMins.ToString() + "m " + secs.ToString() + "s";
+            // Poll for Shift+Q (graceful) and Shift+Esc (forced) without blocking.
+            while (Console.KeyAvailable) {
+                ConsoleKeyInfo k = Console.ReadKey(true);
+                if ((k.Modifiers & ConsoleModifiers.Shift) != 0) {
+                    if (k.Key == ConsoleKey.Q) {
+                        QuitRequested = true;
+                    }
+                    else if (k.Key == ConsoleKey.Escape) {
+                        ForceQuitRequested = true;
+                        QuitRequested      = true;
+                        // Kill the active process immediately.
+                        Process p = ActiveProcess;
+                        if (p != null) {
+                            try { p.Kill(); } catch {}
+                        }
+                    }
+                }
             }
 
+            TimeSpan elapsed = DateTime.Now - startTime;
+            int totalSecs = (int)elapsed.TotalSeconds;
+            int totalMins = (int)elapsed.TotalMinutes;
+            int secs      = elapsed.Seconds;
+
+            string ts = totalSecs < 60
+                ? totalSecs.ToString() + "s"
+                : totalMins.ToString() + "m " + secs.ToString() + "s";
+
             string frame = frames[i % frameCount];
-            string line = "  " + prefix + " " + labelTrunc + "  " + frame + "  " + ts + "   ";
+            string hint;
+            if (ForceQuitRequested) {
+                hint = " [force quitting...]";
+            } else if (QuitRequested) {
+                hint = " [quitting after this file...]";
+            } else {
+                hint = "   [Shift+Q: quit  Shift+Esc: force quit]";
+            }
+            string line = "  " + prefix + " " + labelTrunc + "  " + frame + "  " + ts + hint;
 
             ui.Write("\r" + line);
             i++;
         }
         // Clear the spinner line
-        ui.Write("\r" + new string(' ', 72) + "\r");
+        ui.Write("\r" + new string(' ', 80) + "\r");
     }
 }
 "@
@@ -187,7 +305,9 @@ function Img-StartSpinner {
     catch {
         Write-Verbose "Spinner failed to start: $_"
         $script:SpinnerJob = $null
-        $script:SpinnerStop?.Dispose()
+        if ($null -ne $script:SpinnerStop) {
+            $script:SpinnerStop.Dispose()
+        }
         $script:SpinnerStop = $null
     }
 }
@@ -200,7 +320,7 @@ function Img-StopSpinner {
             
             # Wait for thread to exit
             if ($null -ne $script:SpinnerJob) {
-                $script:SpinnerJob.Join(1000)
+                [void]$script:SpinnerJob.Join(1000)
             }
         }
         catch {
@@ -224,6 +344,7 @@ function Img-WriteResult {
         [Parameter(Mandatory)][IO.FileInfo]$InputFile,
         [Parameter(Mandatory)][IO.FileInfo]$OutputFile,
         [string]$Tag,
+        [Nullable[TimeSpan]]$Elapsed,
         [string]$RelativeBase = $PWD.Path
     )
 
@@ -253,7 +374,19 @@ function Img-WriteResult {
     }
 
     $tagText = if ($Tag) { " [$Tag]" } else { '' }
-    $line    = "$glyph $display : $origStr $($script:NF.Arrow) $resultStr ($sign$percent%)$tagText"
+
+    $timeText = ''
+    if ($null -ne $Elapsed) {
+        $timeStr = if ($Elapsed.TotalSeconds -lt 60) {
+            "{0:N1}s" -f $Elapsed.TotalSeconds
+        }
+        else {
+            "$([int]$Elapsed.TotalMinutes)m $($Elapsed.Seconds)s"
+        }
+        $timeText = "  $($script:NF.Clock) $timeStr"
+    }
+
+    $line = "$glyph $display : $origStr $($script:NF.Arrow) $resultStr ($sign$percent%)$tagText$timeText"
 
     Write-Host $line -ForegroundColor $color
     Write-Log $line

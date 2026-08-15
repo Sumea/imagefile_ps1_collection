@@ -225,6 +225,9 @@ catch {
 $logPath = Img-ResolveLogPath -LogParam $Log -ScriptName 'avifenc-bats'
 if ($logPath) { Img-StartLog -Path $logPath }
 
+# Reset any quit state left over from a previous run in the same session.
+Img-ResetQuitState
+
 # =====================================================================
 # Gather files
 # =====================================================================
@@ -244,12 +247,19 @@ Write-Host "  $($files.Count) file(s) to process" -ForegroundColor DarkGray
 $totalOriginal = 0L
 $totalOutput   = 0L
 $fileIndex     = 0
+$forceQuitted  = $false
 
 # =====================================================================
 # Main loop
 # =====================================================================
 
 foreach ($file in $files) {
+
+    if (Img-PollQuit) {
+        Write-Host ""
+        Write-Host "$($script:NF.Warn) Shift+Q pressed - stopping after current file." -ForegroundColor Yellow
+        break
+    }
 
     $fileIndex++
 
@@ -278,13 +288,50 @@ foreach ($file in $files) {
     }
 
     Img-StartSpinner -Label $file.Name -FileIndex $fileIndex -FileTotal $files.Count
+    $encodeStart = [DateTime]::Now
 
-    $outputText = & $exePath @avifArgs 2>&1 | Out-String
+    # Start the encoder as a trackable process so Shift+Esc can kill it.
+    $stdoutFile = "$env:TEMP\avifenc-out-$PID.txt"
+    $stderrFile = "$env:TEMP\avifenc-err-$PID.txt"
 
+    $proc = Start-Process -FilePath $exePath -ArgumentList $avifArgs `
+        -NoNewWindow -PassThru `
+        -RedirectStandardOutput $stdoutFile `
+        -RedirectStandardError  $stderrFile
+    Img-SetActiveProcess $proc
+    $proc.WaitForExit()
+    Img-SetActiveProcess $null
+    $exitCode = $proc.ExitCode
+
+    # avifenc writes diagnostics to stdout; only surface it on failure.
+    $outputText = ''
+    if ($exitCode -ne 0) {
+        foreach ($f in @($stdoutFile, $stderrFile)) {
+            if (Test-Path $f) {
+                $outputText += Get-Content $f -Raw
+            }
+        }
+    }
+    foreach ($f in @($stdoutFile, $stderrFile)) {
+        Remove-Item $f -Force -ErrorAction SilentlyContinue
+    }
+
+    $elapsed = [DateTime]::Now - $encodeStart
     Img-StopSpinner
 
-    if ($LASTEXITCODE -ne 0) {
-        Img-WriteWarning "avifenc failed (exit $LASTEXITCODE) for $($file.FullName)"
+    # Force quit: clean up any partial output file and stop immediately.
+    if (Img-IsForceQuit) {
+        if (Test-Path -LiteralPath $output) {
+            Remove-Item -LiteralPath $output -Force -ErrorAction SilentlyContinue
+        }
+        Write-Host ""
+        Write-Host "$($script:NF.Warn) Force quit - stopped immediately." -ForegroundColor Red
+        $forceQuitted = $true
+        break
+    }
+
+    if ($exitCode -ne 0) {
+        Img-WriteWarning "avifenc failed (exit $exitCode) for $($file.FullName)"
         if ($outputText) { Img-WriteWarning $outputText.Trim() }
         continue
     }
@@ -299,7 +346,9 @@ foreach ($file in $files) {
     Remove-OriginalIfLarger -Original $file -Output $outputFile -Enabled:$RecycleOriginal
     $totalOriginal += $file.Length
     $totalOutput   += $outputFile.Length
-    Img-WriteResult -InputFile $file -OutputFile $outputFile
+    Img-WriteResult -InputFile $file -OutputFile $outputFile -Elapsed $elapsed
 }
 
-Img-WriteSummary -TotalOriginal $totalOriginal -TotalOutput $totalOutput
+if (-not $forceQuitted) {
+    Img-WriteSummary -TotalOriginal $totalOriginal -TotalOutput $totalOutput
+}
