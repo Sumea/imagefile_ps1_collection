@@ -5,7 +5,7 @@ Assumptions:
 Platform: Windows 10 or Windows 11   
 Powershell 7 installation and default usage over system installed pwsh core.   
 Windows Terminal, though there is likely no difference in functionality with basic windows command line window.    
-*the scripts should be in theory mostly compatible with Linux systems that have Powershell 7 installed, but no testing has been done with any Linux distro plus Powershell 7 at this time. Plus, Linux platform would likely benefit more from a well built shell batch script instead.*  
+*the scripts should be in theory mostly compatible with Linux systems that have Powershell 7 installed, but no testing has been done with any Linux distro plus Powershell 7 at this time. Plus, Linux platform would likely benefit more from a well built shell batch script instead. Feel free to be adventurous.*  
 
 Prerequisites:   
 JPEG-XL handling and JXL focused scripts: [Binaries of libjxl](https://github.com/libjxl/libjxl).  
@@ -42,3 +42,7 @@ JXL Lossy Modular encodes wll get .md.jxl. "**M**o**D**ular". Using Affinity and
 But what will it do? This is another personal script meant for image file sub folder  jungle situations that one might want to compress into the main folder. It will target the directory the script is run from as the main directory, recursively move all files to the main directory from all nested sub directories and adds the the directory names to file's name with separators.    
 **Example:** mainfolder/images/2016/08/photo004.jpg -> mainfolder/images_2016_08_photo004.jpg   
 No pruning logic either, just use your explorer and del key like in the olden days. Really, Bulk Rename Utility does the same slower but safer with a undo.   
+
+##### avifenc-batch.ps1, avifenc-bats.ps1
+Currently, the more usable, and standalone functioning batcher should be avifenc-batch.ps1. avifenc-bats.ps1 and imgbatscommon.ps1 is a pair that need each other in the same directory, result of tons of wasted AI prompting finding out if the scripts could be superficially jazzed up with a spinner and better "working..." indication than nothing. The results, finally, for now, are working but I am not entirely sold on the direction I got the boat with these and would not pursue making wired versions the default. At least I nagged an AI thing long enough to make them actually function, more or less. CTRL+C escape is very unclean and band aided by scripted in escapes. So, while it looks jazzier, I think the base scripts are fine as they are, silent as they may be.
+TL;DR: Use avifenc-batch.ps1
